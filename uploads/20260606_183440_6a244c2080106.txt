@@ -1,0 +1,19 @@
+! Fichier de configuration de test - Agre Net Audit
+hostname Routeur-Entreprise-Test
+!
+username admin password 7 02071A1D1A192A0612201408
+username technicien password secret123
+!
+service password-encryption
+!
+interface GigabitEthernet0/0
+ description Connexion WAN Internet
+ ip address 192.168.1.1 255.255.255.0
+ duplex auto
+ speed auto
+!
+line vty 0 4
+ transport input telnet http
+ login local
+!
+end
