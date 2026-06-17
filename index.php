@@ -45,6 +45,9 @@ $_showModal  = ($_username === '');
         };
     </script>
 
+    <!-- Chart.js 4.x — courbes d'évolution du score -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+
     <style>
         /* ── Reset & globals ─────────────────────────────────────────── */
         *,
@@ -811,6 +814,59 @@ $_showModal  = ($_username === '');
             padding: 1.25rem;
             gap: 1.125rem;
         }
+
+        /* ── Vuln checkboxes (playbook) ───────────────────────────── */
+        .vuln-check-label {
+            display: flex;
+            align-items: center;
+            flex-shrink: 0;
+            cursor: pointer;
+            padding: .25rem;
+            margin: -.25rem;
+            border-radius: .25rem;
+        }
+
+        .vuln-check-label input[type="checkbox"] {
+            position: absolute;
+            opacity: 0;
+            width: 0;
+            height: 0;
+            pointer-events: none;
+        }
+
+        .vuln-check-custom {
+            width: 15px;
+            height: 15px;
+            border-radius: 3px;
+            border: 1.5px solid var(--border-strong);
+            background: var(--bg-subtle);
+            flex-shrink: 0;
+            transition: background .15s ease, border-color .15s ease, box-shadow .15s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+        }
+
+        .vuln-check-label input:checked + .vuln-check-custom {
+            background: var(--accent);
+            border-color: var(--accent);
+        }
+
+        .vuln-check-label input:checked + .vuln-check-custom::after {
+            content: '';
+            display: block;
+            width: 8px;
+            height: 5px;
+            border-left: 1.5px solid #fff;
+            border-bottom: 1.5px solid #fff;
+            transform: rotate(-45deg) translateY(-1px);
+        }
+
+        .vuln-check-label:hover .vuln-check-custom {
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px var(--accent-subtle);
+        }
     </style>
 </head>
 
@@ -1354,6 +1410,35 @@ $_showModal  = ($_username === '');
                     </div>
                 </section>
 
+                <!-- ── Section Historique des scores ─────────────────────────────────── -->
+                <section id="history-section" class="hidden card p-5 fade-up">
+                    <div class="flex items-center justify-between mb-4 flex-wrap gap-2">
+                        <p class="section-label" style="margin-bottom:0;">
+                            <svg viewBox="0 0 20 20" fill="currentColor"
+                                 style="width:.875rem;height:.875rem;color:var(--accent);display:inline-block;vertical-align:middle;margin-right:.35rem;flex-shrink:0;">
+                                <path d="M2 11a1 1 0 011-1h2a1 1 0 011 1v5a1 1 0 01-1 1H3a1 1 0 01-1-1v-5zm6-4a1 1 0 011-1h2a1 1 0 011 1v9a1 1 0 01-1 1H9a1 1 0 01-1-1V7zm6-3a1 1 0 011-1h2a1 1 0 011 1v12a1 1 0 01-1 1h-2a1 1 0 01-1-1V4z"/>
+                            </svg>
+                            Évolution du score —&nbsp;<span id="history-hostname"
+                                style="font-family:ui-monospace,monospace;font-size:.7rem;color:var(--accent);
+                                       text-transform:none;letter-spacing:0;font-weight:700;"></span>
+                        </p>
+                        <span id="history-count"
+                              style="font-size:.65rem;font-weight:600;padding:.2rem .55rem;border-radius:.3rem;
+                                     background:var(--accent-subtle);color:var(--accent);"></span>
+                    </div>
+
+                    <!-- Canvas Chart.js -->
+                    <div style="position:relative;height:190px;width:100%;">
+                        <canvas id="historyChart"></canvas>
+                    </div>
+
+                    <!-- Message premier audit -->
+                    <p id="history-no-data" class="hidden text-center mt-3"
+                       style="font-size:.75rem;color:var(--text-muted);line-height:1.6;">
+                        Premier audit pour cet hôte — l'historique s'enrichira au fil des prochaines analyses.
+                    </p>
+                </section>
+
                 <!-- ── Section Liste des Vulnérabilités (ÉTAPE 3 suite) ─────────────── -->
                 <section id="audit-results" class="hidden space-y-5" data-pdf-target="true">
 
@@ -1367,11 +1452,44 @@ $_showModal  = ($_username === '');
                         <div id="vuln-list" class="space-y-2.5" data-pdf-id="vuln-list"></div>
                     </div>
 
-                    <!-- Bouton nouvelle analyse -->
-                    <div class="flex justify-center pt-2">
+                    <!-- Actions post-audit -->
+                    <div class="flex flex-wrap justify-center gap-3 pt-2">
+
+                        <!-- Télécharger PDF -->
+                        <a id="pdfBtn" href="generate_pdf.php" target="_blank" rel="noopener"
+                           style="display:inline-flex;align-items:center;gap:.5rem;
+                                  padding:.625rem 1.25rem;background:var(--bg-card);
+                                  border:1px solid var(--border);border-radius:.5rem;
+                                  font-size:.875rem;font-weight:600;color:var(--accent);
+                                  text-decoration:none;transition:all .2s ease;cursor:pointer;"
+                           onmouseover="this.style.background='var(--bg-subtle)';this.style.borderColor='var(--accent)';this.style.boxShadow='0 4px 14px rgba(56,189,248,.18)';"
+                           onmouseout="this.style.background='var(--bg-card)';this.style.borderColor='var(--border)';this.style.boxShadow='none';">
+                            <svg viewBox="0 0 20 20" fill="currentColor" style="width:1rem;height:1rem;flex-shrink:0;">
+                                <path fill-rule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm3.293-7.707a1 1 0 011.414 0L9 10.586V3a1 1 0 112 0v7.586l1.293-1.293a1 1 0 111.414 1.414l-3 3a1 1 0 01-1.414 0l-3-3a1 1 0 010-1.414z" clip-rule="evenodd"/>
+                            </svg>
+                            <span>Télécharger le rapport PDF</span>
+                        </a>
+
+                        <!-- Télécharger Playbook -->
+                        <button id="playbookBtn" onclick="downloadPlaybook()"
+                           style="display:inline-flex;align-items:center;gap:.5rem;
+                                  padding:.625rem 1.25rem;background:var(--bg-card);
+                                  border:1px solid var(--border);border-radius:.5rem;
+                                  font-size:.875rem;font-weight:600;color:#10b981;
+                                  cursor:pointer;transition:all .2s ease;"
+                           onmouseover="this.style.background='var(--bg-subtle)';this.style.borderColor='#10b981';this.style.boxShadow='0 4px 14px rgba(16,185,129,.18)';"
+                           onmouseout="this.style.background='var(--bg-card)';this.style.borderColor='var(--border)';this.style.boxShadow='none';">
+                            <svg viewBox="0 0 20 20" fill="currentColor" style="width:1rem;height:1rem;flex-shrink:0;">
+                                <path fill-rule="evenodd" d="M6 2a2 2 0 00-2 2v12a2 2 0 002 2h8a2 2 0 002-2V7.414A2 2 0 0015.414 6L12 2.586A2 2 0 0010.586 2H6zm2 10a1 1 0 10-2 0v3a1 1 0 102 0v-3zm2-3a1 1 0 011 1v5a1 1 0 11-2 0v-5a1 1 0 011-1zm4-1a1 1 0 10-2 0v7a1 1 0 102 0V8z" clip-rule="evenodd"/>
+                            </svg>
+                            <span>Télécharger le Playbook (.cfg)</span>
+                        </button>
+
+                        <!-- Nouvelle analyse -->
                         <button id="newAnalysisBtn" class="btn-primary px-6 py-2.5 text-sm">
                             <span data-i18n="btnNewAnalysis">Nouvelle analyse</span>
                         </button>
+
                     </div>
 
                 </section>
@@ -1484,6 +1602,9 @@ $_showModal  = ($_username === '');
         let username = <?= json_encode($_username)   ?>;
         const showModal = <?= json_encode($_showModal)  ?>;
         let trialLocked = !isPremium && auditCount >= TRIAL_LIMIT;
+        let _currentHostname     = '';
+        let _currentScanDate     = '';
+        let _historyChartInstance = null;
 
         /* ─── Dictionnaire i18n ──────────────────────────────────────────────────── */
         const i18n = {
@@ -2199,10 +2320,39 @@ $_showModal  = ($_username === '');
             const label = audit.score_label || 'CRITICAL_RISK';
 
             // Métadonnées
-            document.getElementById('meta-hostname').textContent = meta.hostname || 'Unknown';
+            _currentHostname = meta.hostname || 'Unknown';
+            _currentScanDate = meta.scan_date || '';
+            const _vendor    = (meta.vendor    || '').trim() || 'Inconnu';
+            const _osVersion = (meta.os_version || '').trim() || 'Inconnu';
+
+            document.getElementById('meta-hostname').textContent = _currentHostname;
             document.getElementById('meta-filename').textContent = data.filename || meta.file_analyzed || '—';
             document.getElementById('meta-date').textContent = meta.scan_date || '—';
             document.getElementById('meta-total').textContent = (meta.total_findings ?? vulns.length) + ' finding(s)';
+
+            // Badge vendor (injecté dynamiquement sous le hostname)
+            const vendorPalette = {
+                'cisco':    { bg: 'rgba(29,78,216,.15)',  border: 'rgba(59,130,246,.4)',  text: '#60a5fa',  icon: '●' },
+                'juniper':  { bg: 'rgba(21,128,61,.15)',  border: 'rgba(34,197,94,.4)',   text: '#4ade80',  icon: '●' },
+                'fortinet': { bg: 'rgba(185,28,28,.15)',  border: 'rgba(239,68,68,.4)',   text: '#f87171',  icon: '●' },
+                'huawei':   { bg: 'rgba(180,83,9,.15)',   border: 'rgba(251,146,60,.4)',  text: '#fb923c',  icon: '●' },
+            };
+            const vendorKey  = _vendor.toLowerCase();
+            let palette      = vendorPalette.cisco; // défaut
+            for (const [k, v] of Object.entries(vendorPalette)) {
+                if (vendorKey.includes(k)) { palette = v; break; }
+            }
+            const hostnameEl = document.getElementById('meta-hostname');
+            const existingBadge = document.getElementById('vendor-badge');
+            if (existingBadge) existingBadge.remove();
+            const vendorBadge = document.createElement('div');
+            vendorBadge.id = 'vendor-badge';
+            vendorBadge.style.cssText = `display:inline-flex;align-items:center;gap:.35rem;margin-top:.35rem;
+                padding:.2rem .55rem;border-radius:.3rem;border:1px solid ${palette.border};
+                background:${palette.bg};font-size:.65rem;font-weight:700;color:${palette.text};
+                font-family:ui-monospace,monospace;white-space:nowrap;`;
+            vendorBadge.innerHTML = `<span style="font-size:.55rem;">${palette.icon}</span>${esc(_vendor)}&nbsp;<span style="opacity:.6;font-weight:400;">|</span>&nbsp;${esc(_osVersion)}`;
+            hostnameEl.insertAdjacentElement('afterend', vendorBadge);
 
             // Score
             const scoreColors = {
@@ -2271,6 +2421,11 @@ $_showModal  = ($_username === '');
                 behavior: 'smooth',
                 block: 'start'
             });
+
+            // Chargement asynchrone du graphique historique
+            if (_currentHostname && _currentHostname !== 'Unknown') {
+                loadHistoryChart(_currentHostname);
+            }
         }
 
         /* ─── Help Drawer ────────────────────────────────────────────────────────── */
@@ -2454,6 +2609,14 @@ $_showModal  = ($_username === '');
                 row.className = `vuln-row vuln-row-${validSev} fade-up`;
                 row.style.animationDelay = (i * 30) + 'ms';
                 row.innerHTML = `
+            <label class="vuln-check-label" onclick="event.stopPropagation()" title="Inclure dans le playbook">
+                <input type="checkbox" class="vuln-checkbox"
+                       data-vuln-id="${id}"
+                       data-title="${esc(vuln.title || '')}"
+                       data-remediation="${esc(vuln.remediation || '')}"
+                       checked>
+                <span class="vuln-check-custom"></span>
+            </label>
             <code style="font-size:.65rem;color:var(--text-secondary);font-family:ui-monospace,monospace;flex-shrink:0;">${id}</code>
             <span style="flex:1;min-width:0;font-size:.875rem;font-weight:600;color:var(--text-primary);
                          white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
@@ -2477,13 +2640,242 @@ $_showModal  = ($_username === '');
             container.appendChild(list);
         }
 
+        /* ─── Graphique historique des scores ───────────────────────────────────── */
+        function hexToRgba(hex, alpha) {
+            const r = parseInt(hex.slice(1, 3), 16);
+            const g = parseInt(hex.slice(3, 5), 16);
+            const b = parseInt(hex.slice(5, 7), 16);
+            return `rgba(${r},${g},${b},${alpha})`;
+        }
+
+        function scoreHex(score) {
+            if (score >= 81) return '#22c55e';
+            if (score >= 61) return '#84cc16';
+            if (score >= 41) return '#f59e0b';
+            if (score >= 21) return '#f97316';
+            return '#ef4444';
+        }
+
+        async function loadHistoryChart(hostname) {
+            const section  = document.getElementById('history-section');
+            const noData   = document.getElementById('history-no-data');
+            const hostEl   = document.getElementById('history-hostname');
+            const countEl  = document.getElementById('history-count');
+
+            // Reset
+            noData.classList.add('hidden');
+            section.classList.add('hidden');
+
+            try {
+                const resp = await fetch('get_history.php?hostname=' + encodeURIComponent(hostname));
+                if (!resp.ok) return;
+                const json = await resp.json();
+                if (json.error || !Array.isArray(json.data)) return;
+
+                section.classList.remove('hidden');
+                hostEl.textContent  = hostname;
+                countEl.textContent = json.data.length + ' analyse' + (json.data.length > 1 ? 's' : '');
+
+                if (json.data.length < 2) {
+                    noData.classList.remove('hidden');
+                    return;
+                }
+
+                const labels      = json.data.map(r => {
+                    const d = new Date(r.date_analyse);
+                    return d.toLocaleDateString(currentLang === 'fr' ? 'fr-FR' : 'en-US',
+                        { day: '2-digit', month: 'short' });
+                });
+                const scores      = json.data.map(r => Number(r.score_securite));
+                const pointColors = scores.map(scoreHex);
+                const lineColor   = scoreHex(scores[scores.length - 1]);
+
+                const ctx = document.getElementById('historyChart').getContext('2d');
+
+                if (_historyChartInstance) {
+                    _historyChartInstance.destroy();
+                    _historyChartInstance = null;
+                }
+
+                // Gradient de fond sous la courbe
+                const gradient = ctx.createLinearGradient(0, 0, 0, 190);
+                gradient.addColorStop(0, hexToRgba(lineColor, 0.22));
+                gradient.addColorStop(1, hexToRgba(lineColor, 0.0));
+
+                _historyChartInstance = new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels,
+                        datasets: [{
+                            label: currentLang === 'fr' ? 'Score de sécurité' : 'Security score',
+                            data: scores,
+                            borderColor: lineColor,
+                            backgroundColor: gradient,
+                            pointBackgroundColor: pointColors,
+                            pointBorderColor: '#0f172a',
+                            pointBorderWidth: 1.5,
+                            pointRadius: 5,
+                            pointHoverRadius: 7,
+                            borderWidth: 2.5,
+                            tension: 0.38,
+                            fill: true,
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        animation: { duration: 700, easing: 'easeInOutQuart' },
+                        plugins: {
+                            legend: { display: false },
+                            tooltip: {
+                                backgroundColor: '#0f172a',
+                                borderColor: '#334155',
+                                borderWidth: 1,
+                                titleColor: '#64748b',
+                                bodyColor: '#f1f5f9',
+                                padding: 10,
+                                cornerRadius: 6,
+                                callbacks: {
+                                    title: items => labels[items[0].dataIndex],
+                                    label: item => {
+                                        const s = item.parsed.y;
+                                        const lbl = s >= 81 ? 'SECURISE' : s >= 61 ? 'RISQUE FAIBLE'
+                                            : s >= 41 ? 'RISQUE MODERE' : s >= 21 ? 'RISQUE ELEVE' : 'RISQUE CRITIQUE';
+                                        return ` Score : ${s}/100  (${lbl})`;
+                                    }
+                                }
+                            }
+                        },
+                        scales: {
+                            x: {
+                                grid: { color: 'rgba(30,41,59,.55)', lineWidth: 1 },
+                                ticks: {
+                                    color: '#475569',
+                                    font: { size: 10 },
+                                    maxRotation: 0,
+                                },
+                                border: { color: '#1e293b' }
+                            },
+                            y: {
+                                min: 0,
+                                max: 100,
+                                grid: { color: 'rgba(30,41,59,.55)', lineWidth: 1 },
+                                ticks: {
+                                    color: '#475569',
+                                    font: { size: 10 },
+                                    stepSize: 25,
+                                    callback: v => v + '/100',
+                                },
+                                border: { color: '#1e293b' }
+                            }
+                        }
+                    }
+                });
+
+            } catch (_) {
+                // Si DB inaccessible, on n'affiche pas la section
+            }
+        }
+
+        /* ─── Playbook Download ──────────────────────────────────────────────────── */
+        function downloadPlaybook() {
+            const checkboxes = [...document.querySelectorAll('.vuln-checkbox:checked')];
+
+            const btn     = document.getElementById('playbookBtn');
+            const btnSpan = btn.querySelector('span');
+
+            if (checkboxes.length === 0) {
+                const orig = btnSpan.textContent;
+                btn.style.color = 'var(--sev-c-accent)';
+                btnSpan.textContent = currentLang === 'en' ? 'No finding selected' : 'Aucun finding sélectionné';
+                setTimeout(() => {
+                    btn.style.color = '#10b981';
+                    btnSpan.textContent = orig;
+                }, 2200);
+                return;
+            }
+
+            const now      = new Date();
+            const dateStr  = now.toLocaleString(currentLang === 'fr' ? 'fr-FR' : 'en-US');
+            const isoDate  = now.toISOString().slice(0, 10);
+            const host     = _currentHostname || 'Unknown';
+            const safeHost = host.replace(/[^a-zA-Z0-9_\-]/g, '_');
+
+            const lines = [
+                '! ================================================================',
+                '! Net Auditor IA — Remediation Playbook',
+                '! Genere par    : Agre Agency (agrekevin09@gmail.com)',
+                '! Date          : ' + dateStr,
+                '! Hote cible    : ' + host,
+                '! Audit du      : ' + (_currentScanDate || isoDate),
+                '! Corrections   : ' + checkboxes.length + ' finding(s) selectionne(s)',
+                '! ================================================================',
+                '!',
+                '! AVERTISSEMENT : Verifiez chaque commande avant application.',
+                '!                 Testez sur un equipement de preprod si possible.',
+                '!',
+                'configure terminal',
+                '!',
+            ];
+
+            checkboxes.forEach((cb, idx) => {
+                const vid   = cb.getAttribute('data-vuln-id')    || ('VULN-' + String(idx + 1).padStart(3, '0'));
+                const title = cb.getAttribute('data-title')       || '';
+                const rem   = (cb.getAttribute('data-remediation') || '').trim();
+
+                if (!rem) return;
+
+                lines.push('! --- ' + vid + (title ? ' : ' + title : '') + ' ---');
+                lines.push(rem);
+                lines.push('!');
+            });
+
+            lines.push('end');
+            lines.push('write memory');
+            lines.push('!');
+            lines.push('! ================================================================');
+            lines.push('! Fin du playbook — ' + checkboxes.length + ' correction(s) appliquee(s)');
+            lines.push('! ================================================================');
+
+            const content  = lines.join('\n');
+            const filename = 'Playbook_' + safeHost + '_' + isoDate + '.cfg';
+
+            const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+            const url  = URL.createObjectURL(blob);
+            const a    = document.createElement('a');
+            a.href     = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+
+            // Feedback visuel bref
+            const orig = btnSpan.textContent;
+            btn.style.color = 'var(--accent)';
+            btnSpan.textContent = currentLang === 'en'
+                ? '✓ Playbook downloaded'
+                : '✓ Playbook téléchargé';
+            setTimeout(() => {
+                btn.style.color = '#10b981';
+                btnSpan.textContent = orig;
+            }, 2200);
+        }
+
         /* ─── Nouvelle analyse ───────────────────────────────────────────────────── */
         document.getElementById('newAnalysisBtn').addEventListener('click', () => {
             sessionStorage.removeItem('nai_audit');
             closeDrawer();
             document.getElementById('results-summary-section').classList.add('hidden');
             document.getElementById('audit-results').classList.add('hidden');
+            document.getElementById('history-section').classList.add('hidden');
             document.getElementById('error-section').classList.add('hidden');
+            if (_historyChartInstance) {
+                _historyChartInstance.destroy();
+                _historyChartInstance = null;
+            }
+            _currentHostname = '';
+            _currentScanDate = '';
             document.getElementById('uploadForm').reset();
             dzState('idle');
             submitBtn.disabled = true;

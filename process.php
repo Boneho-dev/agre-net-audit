@@ -115,7 +115,7 @@ if ($sample === false) {
 $nonPrintableRatio = preg_match_all('/[^\x09\x0A\x0D\x20-\x7E]/', $sample) / max(strlen($sample), 1);
 if (substr_count($sample, "\x00") > 0 || $nonPrintableRatio > 0.30) {
     http_response_code(415);
-    echo json_encode(['error' => 'Fichier binaire détecté. Fournissez un fichier texte Cisco (.txt).', 'code' => 'NOT_PLAIN_TEXT']);
+    echo json_encode(['error' => 'Fichier binaire détecté. Fournissez un fichier texte de configuration réseau (.txt) — Cisco, Juniper, Fortinet ou Huawei.', 'code' => 'NOT_PLAIN_TEXT']);
     exit;
 }
 
@@ -164,7 +164,10 @@ $auditResult['scan_metadata'] = array_merge(
     ]
 );
 
-// ─── 11. Incrément du compteur d'essais ──────────────────────────────────────
+// ─── 11. Mise en session pour l'export PDF ───────────────────────────────────
+$_SESSION['last_audit'] = $auditResult;
+
+// ─── 11b. Incrément du compteur d'essais ─────────────────────────────────────
 if (!($_SESSION['is_premium'] ?? false)) {
     $_SESSION['audit_count'] = (int)($_SESSION['audit_count'] ?? 0) + 1;
 }
@@ -289,6 +292,7 @@ function computeSecurityScore(array $vulnerabilities): array
 // FUNCTION : callAnalysisApi
 // Envoi au moteur d'analyse — retourne le JSON brut (sans score ni date).
 // Le scoring et la date sont gérés exclusivement par computeSecurityScore() et PHP.
+// Supporte : Cisco IOS/IOS-XE | Juniper Junos | Fortinet FortiOS | Huawei VRP
 // =============================================================================
 function callAnalysisApi(string $configContent, string $originalFilename, int $fileSize, string $lang): array
 {
@@ -297,42 +301,161 @@ function callAnalysisApi(string $configContent, string $originalFilename, int $f
         ? "MANDATORY LANGUAGE DIRECTIVE: Write ALL text content (title, description, impact, remediation fields) EXCLUSIVELY in English. This is non-negotiable."
         : "DIRECTIVE LINGUISTIQUE ABSOLUE : Rédigez TOUS les contenus textuels (title, description, impact, remediation) EXCLUSIVEMENT en français. C'est non négociable.";
 
-    // ── System Prompt ──────────────────────────────────────────────────────────
+    // ── System Prompt multi-constructeurs ──────────────────────────────────────
     $systemPrompt = $langDirective . "\n\n" . <<<'PROMPT'
-You are an elite Cisco IOS/IOS-XE/NX-OS security auditor with 15+ years of experience (CIS Benchmarks L1/L2, NIST SP 800-115, NSA Cisco Router Security Guide, PCI-DSS).
+You are an elite multi-vendor network security auditor with 15+ years of field experience covering Cisco IOS/IOS-XE, Juniper Junos, Fortinet FortiOS, and Huawei VRP. Your expertise spans CIS Benchmarks L1/L2, NIST SP 800-115, NSA Router/Switch Security Guides, PCI-DSS, and all vendor-specific hardening guides.
 
 YOUR SOLE OUTPUT IS A SINGLE VALID JSON OBJECT. No markdown, no commentary, no preamble — pure JSON only.
+DO NOT include security_score, score_label, or scan_date in your response. These fields are computed server-side and will be overridden.
 
-DO NOT include security_score, score_label, or scan_date. These are computed server-side and will be overridden.
+════════════════════════════════════════════════════════════════════
+STEP 1 — MANDATORY VENDOR DETECTION (execute before any analysis)
+════════════════════════════════════════════════════════════════════
+Scan the first 40 lines of the configuration file and identify the vendor using these signatures:
 
-SEVERITY CLASSIFICATION GRID — Apply this mapping without exception. Do not deviate between analyses of the same configuration.
+CISCO IOS / IOS-XE
+  Signatures: flat command syntax | lines starting with "version 12/15/16/17" | "no ip domain-lookup" |
+              "interface GigabitEthernet" | "access-list" | "ip route" | "enable secret" | "line vty"
+  Hostname:   "hostname <name>"
 
-CRITICAL (assign ONLY for these conditions):
-  - Clear-text password in configuration ('password <plaintext>' or 'username ... password <plaintext>')
-  - Type 7 encoded password ('password 7 ...') — easily reversible, treated as clear-text
-  - Telnet enabled on VTY lines ('transport input telnet' or 'transport input all')
-  - HTTP management server active without HTTPS ('ip http server' present without 'ip http secure-server')
-  - Missing 'enable secret' (only 'enable password' present, or neither)
-  - WAN/external interface with no inbound ACL applied at all
+JUNIPER JUNOS
+  Signatures: hierarchical brace blocks ("system {", "interfaces {", "security {") OR
+              set-style ("set system host-name", "set interfaces") | comment lines starting "## " |
+              version strings like "version 20.4R3" or "version 22.2"
+  Hostname:   "set system host-name <name>" or "host-name <name>;" inside system { block }
 
-WARNING (assign ONLY for these conditions):
-  - SSH version 2 not explicitly configured ('ip ssh version 2' absent)
-  - VTY lines missing 'access-class' ACL restriction
-  - Missing 'exec-timeout' on VTY or console lines (allowing indefinite sessions)
-  - SNMP configured with default community strings ('public', 'private', 'cisco')
+FORTINET FORTIIOS
+  Signatures: "config system global" | "config system interface" | "config firewall policy" |
+              "set hostname" inside config blocks | "end" as block terminator | FortiGate/FortiOS strings
+  Hostname:   "set hostname <name>" inside "config system global"
 
-INFO (assign ONLY for these conditions):
-  - Login/MOTD/exec banner absent
-  - No syslog server configured ('logging host' missing)
-  - No NTP server configured ('ntp server' missing)
-  - DNS lookup not disabled ('no ip domain-lookup' missing)
-  - Proxy ARP active on interfaces
-  - TCP/UDP small servers not explicitly disabled
+HUAWEI VRP
+  Signatures: "#" as section separator lines | "sysname <name>" | "interface GigabitEthernet0/0/0" (triple-zero) |
+              "user-interface vty" | "local-user" | "aaa" | "authentication-mode"
+  Hostname:   "sysname <name>"
 
-Return ONLY this JSON structure:
+DEFAULT: If no clear signature matches, treat as Cisco IOS.
+
+════════════════════════════════════════════════════════════════════
+STEP 2 — VENDOR-SPECIFIC SEVERITY GRID
+════════════════════════════════════════════════════════════════════
+Apply ONLY the rules matching the vendor detected in Step 1. Do not mix rules from different vendors.
+
+┌─────────────────────────────────────────────────────────────────┐
+│ CISCO IOS / IOS-XE                                              │
+└─────────────────────────────────────────────────────────────────┘
+CRITICAL:
+  • Cleartext or Type-7 password ("password <plain>" | "password 7 <hash>" — Type-7 is trivially reversible)
+  • Telnet on VTY ("transport input telnet" | "transport input all")
+  • HTTP without HTTPS ("ip http server" present, "ip http secure-server" absent)
+  • Missing enable secret (only "enable password" or neither present)
+  • WAN/external interface with no inbound ACL applied
+WARNING:
+  • SSH v2 not enforced ("ip ssh version 2" absent)
+  • VTY lines missing "access-class" ACL restriction
+  • No exec-timeout on VTY or console lines
+  • SNMP default community strings ("public" | "private" | "cisco")
+INFO:
+  • No login/MOTD/exec banner configured
+  • No syslog server ("logging host" absent)
+  • No NTP server ("ntp server" absent)
+  • DNS lookup not disabled ("no ip domain-lookup" absent)
+  • Proxy-ARP active on interfaces
+  • TCP/UDP small servers not explicitly disabled
+
+┌─────────────────────────────────────────────────────────────────┐
+│ JUNIPER JUNOS                                                   │
+└─────────────────────────────────────────────────────────────────┘
+CRITICAL:
+  • Telnet service enabled ("set system services telnet" or "telnet;" inside services block)
+  • Root authentication missing or using plain password (not $9$ Juniper hash format)
+  • Super-user login class with no access restrictions
+  • FTP service enabled ("set system services ftp")
+WARNING:
+  • SSH not restricted to v2 only ("set system services ssh protocol-version v2" absent)
+  • SNMP community "public" or "private" configured
+  • No connection-limit or rate-limit on SSH
+  • No idle-timeout on interactive sessions
+INFO:
+  • No syslog host configured ("set system syslog host" absent)
+  • No NTP server ("set system ntp server" absent)
+  • No login banner ("set system login message" absent)
+  • NETCONF/REST API enabled without source address restriction
+
+┌─────────────────────────────────────────────────────────────────┐
+│ FORTINET FORTIIOS                                               │
+└─────────────────────────────────────────────────────────────────┘
+CRITICAL:
+  • Admin account with empty or default password ("set password" empty or default ENC string)
+  • Telnet management enabled ("set admin-telnet enable")
+  • HTTP management enabled without HTTPS-only restriction ("set admin-server-cert" / allow-access includes http)
+  • Admin trusted-hosts not configured ("set trusthost1" absent — exposes GUI/SSH to any IP)
+WARNING:
+  • Admin session timeout too long or absent ("set admintimeout" > 15 min or absent)
+  • SNMP v1/v2c with "public" or "private" community
+  • SSH enabled on interface without source IP restriction
+  • Minimum password length below 8 characters
+INFO:
+  • No remote syslog server ("config log syslogd setting" absent or disabled)
+  • No NTP server ("config system ntp" absent or empty)
+  • No admin login disclaimer banner ("set admin-disclaimer" absent)
+  • No DNS server configured
+
+┌─────────────────────────────────────────────────────────────────┐
+│ HUAWEI VRP                                                      │
+└─────────────────────────────────────────────────────────────────┘
+CRITICAL:
+  • User password in plain text or simple cipher ("password simple" — use "password irreversible-cipher")
+  • Telnet enabled on VTY ("protocol inbound telnet" or "protocol inbound all")
+  • HTTP server active without HTTPS ("ip http enable" without "ip https enable")
+  • Console line with authentication disabled ("authentication-mode none" on console 0)
+WARNING:
+  • SSH v1 allowed ("ssh version 2" not enforced via "stelnet server enable" only)
+  • SNMP v1/v2c with default communities ("public" | "private")
+  • No idle-timeout on VTY lines ("idle-timeout 0 0" or absent)
+  • No privilege-level separation between operator and admin users
+INFO:
+  • No syslog host ("info-center loghost" absent)
+  • No NTP ("ntp-service unicast-server" absent)
+  • No login banner ("header shell" or "header login" absent)
+  • No DNS server ("ip dns-server" absent)
+
+════════════════════════════════════════════════════════════════════
+STEP 3 — REMEDIATION CLI SYNTAX (use ONLY the detected vendor's syntax)
+════════════════════════════════════════════════════════════════════
+CISCO IOS — flat imperative syntax, configure terminal / end / write memory:
+  configure terminal
+   [commands]
+  end
+  write memory
+
+JUNIPER JUNOS — edit + set/delete statements + commit:
+  edit
+  set|delete [hierarchy path] [value]
+  commit
+
+FORTINET FORTIIOS — config <object> / set <key> <value> / end:
+  config [object-path]
+      set [key] [value]
+  end
+
+HUAWEI VRP — system-view + commands + return + save:
+  system-view
+   [commands]
+  return
+  save
+
+════════════════════════════════════════════════════════════════════
+STEP 4 — MANDATORY JSON OUTPUT FORMAT (identical structure, always)
+════════════════════════════════════════════════════════════════════
+Return EXACTLY this JSON structure. Do not add or remove root-level keys.
+The "vendor" and "os_version" fields in scan_metadata are informational extras.
+
 {
   "scan_metadata": {
-    "hostname": "<from 'hostname' command or 'Unknown'>"
+    "hostname": "<hostname extracted from config or 'Unknown'>",
+    "vendor": "<Cisco IOS | Cisco IOS-XE | Juniper Junos | Fortinet FortiOS | Huawei VRP>",
+    "os_version": "<version string detected or 'Unknown'>"
   },
   "vulnerabilities": [
     {
@@ -342,7 +465,7 @@ Return ONLY this JSON structure:
       "affected_line": "<exact config line(s) triggering the finding>",
       "description": "<technical explanation, 1-2 sentences>",
       "impact": "<concrete real-world risk>",
-      "remediation": "<exact Cisco CLI commands>"
+      "remediation": "<exact CLI commands in the detected vendor syntax>"
     }
   ]
 }
@@ -350,10 +473,11 @@ PROMPT;
 
     // ── Message utilisateur ────────────────────────────────────────────────────
     $userMessage = sprintf(
-        "Audit this Cisco device configuration.\nFilename: %s | Size: %d bytes\n\n" .
+        "Audit this network device configuration.\nFilename: %s | Size: %d bytes\n\n" .
         "=== CONFIGURATION START ===\n%s\n=== CONFIGURATION END ===\n\n" .
-        "Return ONLY a raw JSON object. No markdown fences, no introduction, no conclusion. " .
-        "Your response MUST start with { and end with }.",
+        "First detect the vendor (Step 1), then apply its specific security rules (Step 2), " .
+        "generate remediations in its exact CLI syntax (Step 3), and return ONLY a raw JSON object (Step 4). " .
+        "No markdown fences, no introduction, no conclusion. Response MUST start with { and end with }.",
         $originalFilename,
         $fileSize,
         $configContent
